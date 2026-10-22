@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "dictation-app",
+  "productName": "Dictation",
   "version": "0.1.0",
-  "identifier": "com.reza.dictation-app",
+  "identifier": "com.mohammedr3za.dictation",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,9 +13,11 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "dictation-app",
-        "width": 800,
-        "height": 600
+        "title": "Dictation",
+        "width": 940,
+        "height": 640,
+        "minWidth": 760,
+        "minHeight": 520
       }
     ],
     "security": {
