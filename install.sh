@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Installs the latest Dictation AppImage for Linux.
+# Usage: curl -fsSL https://raw.githubusercontent.com/mohammedr3za/dictation-app/main/install.sh | bash
+set -euo pipefail
+
+REPO="mohammedr3za/dictation-app"
+APP="dictation"
+SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/dictation"
+BIN_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "This installer is for Linux. On macOS, download the .dmg from:"
+  echo "  https://github.com/$REPO/releases/latest"
+  exit 1
+fi
+
+echo "Fetching the latest release…"
+API="https://api.github.com/repos/$REPO/releases/latest"
+URL="$(curl -fsSL "$API" \
+  | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+\.AppImage"' \
+  | sed -E 's/.*"(https[^"]+)"/\1/' \
+  | head -n 1)"
+
+if [ -z "${URL:-}" ]; then
+  echo "No Linux AppImage found in the latest release yet."
+  echo "Build from source instead:"
+  echo "  git clone https://github.com/$REPO.git && cd dictation-app"
+  echo "  npm install && npm run tauri build"
+  exit 1
+fi
+
+mkdir -p "$SHARE_DIR" "$BIN_DIR" "$DESKTOP_DIR"
+echo "Downloading $(basename "$URL")…"
+curl -fL --progress-bar "$URL" -o "$SHARE_DIR/$APP.AppImage"
+chmod +x "$SHARE_DIR/$APP.AppImage"
+
+# Wrapper: APPIMAGE_EXTRACT_AND_RUN avoids requiring libfuse2 on newer distros.
+cat > "$BIN_DIR/$APP" <<EOF
+#!/bin/sh
+exec env APPIMAGE_EXTRACT_AND_RUN=1 "$SHARE_DIR/$APP.AppImage" "\$@"
+EOF
+chmod +x "$BIN_DIR/$APP"
+
+cat > "$DESKTOP_DIR/$APP.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Dictation
+Comment=Local, on-device dictation
+Exec=$BIN_DIR/$APP
+Terminal=false
+Categories=Utility;AudioVideo;
+EOF
+
+echo
+echo "Installed: $BIN_DIR/$APP"
+case ":$PATH:" in
+  *":$BIN_DIR:"*) echo "Run it with: $APP" ;;
+  *) echo "Add this to your shell profile, then restart the terminal:"
+     echo "  export PATH=\"$BIN_DIR:\$PATH\"" ;;
+esac
+
+if [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+  echo
+  echo "Note: you are on Wayland. The global shortcut and automatic paste are"
+  echo "limited there; use the in-app Start/Stop button and the clipboard mode."
+fi

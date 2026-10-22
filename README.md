@@ -16,6 +16,18 @@ Built with Tauri 2, Rust, and TypeScript, so the same app runs on macOS and Linu
 
 ### Linux
 
+Install with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mohammedr3za/dictation-app/main/install.sh | bash
+```
+
+That downloads the latest AppImage to `~/.local/share/dictation`, adds a `dictation` launcher in
+`~/.local/bin`, and creates a desktop entry. If `~/.local/bin` is not on your `PATH`, the installer
+tells you what to add.
+
+Or install manually:
+
 1. Download `Dictation_*.AppImage` from [Releases](../../releases/latest).
 2. Make it executable and run:
 
