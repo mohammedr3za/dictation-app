@@ -53,7 +53,7 @@ async function renderModels() {
         <h3>${model.name}</h3>
         <p>${model.note}</p>
       </div>
-      <span class="badge">${model.installed ? "Installed" : model.size_mb + " MB"}</span>`;
+      <span class="badge ${model.installed ? "ok" : ""}">${model.installed ? "Installed" : model.size_mb + " MB"}</span>`;
     card.appendChild(head);
 
     const actions = document.createElement("div");
