@@ -149,5 +149,36 @@ window.addEventListener("DOMContentLoaded", async () => {
       : `${Math.round(downloaded / 1_000_000)} MB`;
   });
 
+  const recordButton = el<HTMLButtonElement>("#record-toggle");
+  const transcriptState = el("#transcript-state");
+  let recording = false;
+
+  recordButton.addEventListener("click", async () => {
+    try {
+      if (recording) {
+        const text = await invoke<string>("stop_dictation");
+        transcriptState.textContent = text ? text : "No speech detected.";
+      } else {
+        await invoke("start_dictation");
+        transcriptState.textContent = "Listening…";
+      }
+    } catch (error) {
+      transcriptState.textContent = `Error: ${error}`;
+    }
+  });
+
+  await listen<boolean>("recording", (event) => {
+    recording = event.payload;
+    recordButton.textContent = recording ? "Stop recording" : "Start recording";
+  });
+
+  await listen<string>("transcript", (event) => {
+    transcriptState.textContent = event.payload;
+  });
+
+  await listen<string>("dictation-error", (event) => {
+    transcriptState.textContent = `Error: ${event.payload}`;
+  });
+
   await load();
 });

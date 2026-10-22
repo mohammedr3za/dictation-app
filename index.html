@@ -39,7 +39,7 @@
 
           <label class="field">
             <span>Shortcut</span>
-            <input id="hotkey" type="text" placeholder="Alt+Command" />
+            <input id="hotkey" type="text" placeholder="Alt+Command+KeyD" />
           </label>
 
           <label class="field">
@@ -56,6 +56,12 @@
               <button data-mode="clipboard">Copy to clipboard</button>
             </div>
           </div>
+
+          <div class="field">
+            <span>Dictation</span>
+            <button class="primary" id="record-toggle">Start recording</button>
+          </div>
+          <p class="hint" id="transcript-state">Idle.</p>
 
           <button class="primary" id="save-general">Save</button>
         </section>

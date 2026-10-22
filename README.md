@@ -76,19 +76,33 @@ npm run tauri dev
 - Cleanup is off by default. When enabled, transcript text is sent to the API endpoint you configure.
 - API keys are stored in the OS keychain (Keychain on macOS, Secret Service on Linux), never in the config file.
 
+## Usage
+
+1. Download a model from the **Model** tab.
+2. Press **Alt+Command+D** (or click **Start recording**).
+3. Speak.
+4. Press the shortcut again to stop. The transcript is pasted at your cursor, or copied to the
+   clipboard if you chose that mode.
+
+On macOS the first recording asks for microphone access. On Linux, X11 is supported; Wayland
+compositors may block global shortcuts and synthetic input.
+
 ## Status
 
-Early development. Working today:
+Working:
 
 - Settings UI on macOS and Linux
 - On-device model download and management
-- Verified offline transcription through sherpa-onnx
+- Offline transcription through sherpa-onnx
+- Microphone capture, resampling to 16 kHz
+- Global toggle shortcut (Alt+Command+D)
+- Paste at cursor or copy to clipboard
 
-In progress:
+Not yet implemented:
 
-- Global push-to-talk hotkey
-- Microphone capture and text insertion
+- Hold-to-talk (the current shortcut is press-to-start, press-to-stop)
 - Optional LLM cleanup
+- Tray icon
 
 ## License
 
