@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="224" fill="#14110b"/>
+
+  <!-- page -->
+  <rect x="282" y="190" width="460" height="644" rx="58" fill="#f6f1e6"/>
+
+  <!-- text lines -->
+  <rect x="352" y="292" width="320" height="26" rx="13" fill="#d9d0bd"/>
+  <rect x="352" y="356" width="320" height="26" rx="13" fill="#d9d0bd"/>
+  <rect x="352" y="420" width="226" height="26" rx="13" fill="#d9d0bd"/>
+
+  <rect x="352" y="628" width="320" height="26" rx="13" fill="#d9d0bd"/>
+  <rect x="352" y="692" width="226" height="26" rx="13" fill="#d9d0bd"/>
+
+  <!-- mic button -->
+  <circle cx="512" cy="540" r="116" fill="#e0a13a"/>
+
+  <rect x="486" y="484" width="52" height="86" rx="26" fill="#14110b"/>
+  <path d="M460 560a52 52 0 0 0 104 0" fill="none" stroke="#14110b" stroke-width="17" stroke-linecap="round"/>
+  <path d="M512 612v26" stroke="#14110b" stroke-width="17" stroke-linecap="round"/>
+</svg>
