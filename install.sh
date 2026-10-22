@@ -15,15 +15,22 @@ if [ "$(uname -s)" != "Linux" ]; then
   exit 1
 fi
 
-echo "Fetching the latest release…"
+case "$(uname -m)" in
+  x86_64|amd64)  ARCH_TAG="amd64" ;;
+  aarch64|arm64) ARCH_TAG="aarch64" ;;
+  *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+esac
+
+echo "Fetching the latest release for $ARCH_TAG…"
 API="https://api.github.com/repos/$REPO/releases/latest"
 URL="$(curl -fsSL "$API" \
   | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+\.AppImage"' \
   | sed -E 's/.*"(https[^"]+)"/\1/' \
+  | grep -i "$ARCH_TAG" \
   | head -n 1)"
 
 if [ -z "${URL:-}" ]; then
-  echo "No Linux AppImage found in the latest release yet."
+  echo "No $ARCH_TAG AppImage found in the latest release yet."
   echo "Build from source instead:"
   echo "  git clone https://github.com/$REPO.git && cd dictation-app"
   echo "  npm install && npm run tauri build"
