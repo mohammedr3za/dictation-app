@@ -28,11 +28,11 @@ echo "Fetching the latest release for $ARCH_TAG…"
 URL="https://github.com/$REPO/releases/latest/download/Dictation-linux-$ARCH_TAG.AppImage"
 if ! curl -fsIL "$URL" >/dev/null 2>&1; then
   # Fallback for releases that only carry versioned asset names.
-  URL="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+  URL="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
     | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+\.AppImage"' \
     | sed -E 's/.*"(https[^"]+)"/\1/' \
     | grep -i "$ARCH_TAG" \
-    | head -n 1)"
+    | head -n 1)" || true
 fi
 
 if [ -z "${URL:-}" ]; then
