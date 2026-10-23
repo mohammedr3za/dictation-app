@@ -22,12 +22,18 @@ case "$(uname -m)" in
 esac
 
 echo "Fetching the latest release for $ARCH_TAG…"
-API="https://api.github.com/repos/$REPO/releases/latest"
-URL="$(curl -fsSL "$API" \
-  | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+\.AppImage"' \
-  | sed -E 's/.*"(https[^"]+)"/\1/' \
-  | grep -i "$ARCH_TAG" \
-  | head -n 1)"
+
+# Preferred: the stable asset name, which redirects to the latest release and
+# never touches the rate-limited GitHub API.
+URL="https://github.com/$REPO/releases/latest/download/Dictation-linux-$ARCH_TAG.AppImage"
+if ! curl -fsIL "$URL" >/dev/null 2>&1; then
+  # Fallback for releases that only carry versioned asset names.
+  URL="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+    | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+\.AppImage"' \
+    | sed -E 's/.*"(https[^"]+)"/\1/' \
+    | grep -i "$ARCH_TAG" \
+    | head -n 1)"
+fi
 
 if [ -z "${URL:-}" ]; then
   echo "No $ARCH_TAG AppImage found in the latest release yet."

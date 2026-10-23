@@ -18,9 +18,11 @@ jobs:
             args: --target aarch64-apple-darwin
           - platform: ubuntu-22.04
             args: ""
+            arch_tag: amd64
           # ARM64 Linux. Requires GitHub's arm64 public runners.
           - platform: ubuntu-24.04-arm
             args: --target aarch64-unknown-linux-gnu
+            arch_tag: aarch64
 
     runs-on: ${{ matrix.platform }}
 
@@ -52,3 +54,20 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      # The installer downloads a stable asset name so it never has to call the
+      # rate-limited GitHub API. tauri-action only uploads versioned names, so
+      # publish a copy under the stable one.
+      - name: Publish stable-named Linux AppImage
+        if: startsWith(matrix.platform, 'ubuntu')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          src="$(find src-tauri/target -path '*/bundle/appimage/*.AppImage' -type f | head -n 1)"
+          if [ -z "$src" ]; then
+            echo "No AppImage produced"; exit 1
+          fi
+          out="Dictation-linux-${{ matrix.arch_tag }}.AppImage"
+          cp "$src" "$out"
+          gh release upload "${{ github.ref_name }}" "$out" --clobber
