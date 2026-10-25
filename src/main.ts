@@ -23,6 +23,48 @@ interface ModelInfo {
 
 let settings: Settings;
 let insertMode: InsertMode = "paste";
+let platform = "linux";
+
+// The global shortcut plugin needs a non-modifier key, so a chord of only
+// modifiers cannot be registered — capture rejects it here too.
+const MODIFIER_CODES = new Set([
+  "ControlLeft",
+  "ControlRight",
+  "AltLeft",
+  "AltRight",
+  "ShiftLeft",
+  "ShiftRight",
+  "MetaLeft",
+  "MetaRight",
+  "OSLeft",
+  "OSRight",
+]);
+
+// Codes the shortcut parser accepts. Anything else is ignored during capture.
+const CAPTURABLE_CODE =
+  /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Enter|Tab|Backquote|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Arrow(Up|Down|Left|Right)|Numpad[0-9])$/;
+
+function displayHotkey(accelerator: string): string {
+  const parts = accelerator.split("+");
+  const key = parts[parts.length - 1] ?? "";
+  const isMac = platform === "macos";
+
+  const labels: Record<string, string> = isMac
+    ? { Control: "⌃", Alt: "⌥", Shift: "⇧", Command: "⌘" }
+    : { Control: "Ctrl", Alt: "Alt", Shift: "Shift", Command: "Super" };
+
+  const modifiers = parts.slice(0, -1).map((modifier) => labels[modifier] ?? modifier);
+  const keyLabel = key
+    .replace(/^Key/, "")
+    .replace(/^Digit/, "")
+    .replace(/^Numpad/, "Num");
+
+  return [...modifiers, keyLabel].join(isMac ? "" : "+");
+}
+
+function modifierNames(): string {
+  return platform === "macos" ? "⌘, ⌥, ⌃ or ⇧" : "Ctrl, Alt, Shift or Super";
+}
 
 const el = <T extends HTMLElement>(selector: string): T =>
   document.querySelector(selector) as T;
@@ -35,6 +77,36 @@ function renderInsertMode() {
 
 function setStatus(text: string) {
   el("#status").textContent = text;
+}
+
+// ---------- shortcut capture ----------
+
+let capturing = false;
+
+const hotkeyButton = (): HTMLButtonElement => el<HTMLButtonElement>("#hotkey");
+
+function renderHotkey() {
+  el("#hotkey-value").textContent = displayHotkey(settings.hotkey);
+}
+
+function startCapture() {
+  capturing = true;
+  hotkeyButton().classList.add("capturing");
+  el("#hotkey-hint").textContent = "Hold a modifier and press a key…";
+  hotkeyButton().focus();
+  invoke("pause_hotkey", { paused: true }).catch(console.error);
+}
+
+function stopCapture(hint = "Click to change") {
+  if (capturing) {
+    invoke("pause_hotkey", { paused: false }).catch(console.error);
+  }
+  capturing = false;
+  hotkeyButton().classList.remove("capturing");
+  // Releasing Space or Enter on a focused button clicks it, which would
+  // immediately start another capture.
+  hotkeyButton().blur();
+  el("#hotkey-hint").textContent = hint;
 }
 
 async function renderModels() {
@@ -102,15 +174,16 @@ async function renderModels() {
 async function load() {
   settings = await invoke<Settings>("load_settings");
 
-  el<HTMLInputElement>("#hotkey").value = settings.hotkey;
-  el<HTMLSelectElement>("#language").value = settings.language;
-  insertMode = settings.insert_mode;
-  renderInsertMode();
-
   const info = await invoke<{ version: string; platform: string; arch: string }>("app_info");
+  platform = info.platform;
   el("#version").textContent = info.version;
   el("#platform-detail").textContent = `${info.platform} · ${info.arch}`;
   el("#platform").textContent = `${info.platform} · local`;
+
+  el<HTMLSelectElement>("#language").value = settings.language;
+  insertMode = settings.insert_mode;
+  renderInsertMode();
+  renderHotkey();
 
   await renderModels();
 }
@@ -132,12 +205,80 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
+  hotkeyButton().addEventListener("click", () => {
+    if (capturing) {
+      stopCapture();
+    } else {
+      startCapture();
+    }
+  });
+
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!capturing) return;
+
+      // Keep the chord from typing into the page or triggering web view shortcuts.
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        stopCapture();
+        return;
+      }
+      if (MODIFIER_CODES.has(event.code)) return;
+
+      if (!CAPTURABLE_CODE.test(event.code)) {
+        el("#hotkey-hint").textContent = "That key can't be used — try another";
+        return;
+      }
+
+      const modifiers: string[] = [];
+      if (event.ctrlKey) modifiers.push("Control");
+      if (event.altKey) modifiers.push("Alt");
+      if (event.shiftKey) modifiers.push("Shift");
+      if (event.metaKey) modifiers.push("Command");
+
+      if (modifiers.length === 0) {
+        el("#hotkey-hint").textContent = `Add ${modifierNames()} to the key`;
+        return;
+      }
+
+      settings.hotkey = [...modifiers, event.code].join("+");
+      renderHotkey();
+      stopCapture("Unsaved — click Save");
+    },
+    true,
+  );
+
+  window.addEventListener(
+    "keyup",
+    (event) => {
+      if (!capturing || !MODIFIER_CODES.has(event.code)) return;
+      // The last modifier came up with no key in between, so they were pressed alone.
+      if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+        el("#hotkey-hint").textContent = "Modifiers alone can't be a shortcut — add a key";
+      }
+    },
+    true,
+  );
+
+  window.addEventListener("blur", () => {
+    if (capturing) stopCapture();
+  });
+
   el("#save-general").addEventListener("click", async () => {
-    settings.hotkey = el<HTMLInputElement>("#hotkey").value;
     settings.language = el<HTMLSelectElement>("#language").value;
     settings.insert_mode = insertMode;
-    await invoke("save_settings", { settings });
-    setStatus("Saved");
+    try {
+      await invoke("save_settings", { settings });
+      setStatus("Saved");
+      stopCapture();
+    } catch (error) {
+      // The setting is stored, but the combination is owned by another app.
+      setStatus(`Shortcut inactive: ${error}`);
+      el("#hotkey-hint").textContent = "In use by another app — click to change";
+    }
   });
 
   await listen<{ downloaded: number; total: number }>("model-progress", (event) => {

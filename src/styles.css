@@ -163,6 +163,33 @@ input::placeholder { color: var(--faint); }
 input:hover, select:hover { border-color: #3a352b; }
 input:focus, select:focus { border-color: var(--amber); }
 
+.shortcut {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.shortcut:hover { border-color: #3a352b; }
+.shortcut:focus-visible { outline: none; border-color: var(--amber); }
+.shortcut #hotkey-value { font-variant-numeric: tabular-nums; letter-spacing: 0.4px; }
+.shortcut-hint { font-size: 11px; color: var(--faint); }
+.shortcut.capturing {
+  border-color: var(--amber);
+  background: var(--surface-3);
+}
+.shortcut.capturing .shortcut-hint { color: var(--amber); }
+
 .segmented {
   display: flex;
   gap: 4px;

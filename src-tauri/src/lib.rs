@@ -20,9 +20,37 @@ fn load_settings() -> Settings {
     config::load()
 }
 
+/// Replaces whatever global shortcut is registered with `accelerator`.
+///
+/// Fails when the combination cannot be registered, which happens when another
+/// app already owns it. The setting is saved regardless, so the caller can report
+/// that the shortcut is inactive and let the user pick another.
+fn apply_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), String> {
+    let shortcuts = app.global_shortcut();
+    let _ = shortcuts.unregister_all();
+    shortcuts
+        .register(accelerator)
+        .map_err(|e| format!("{accelerator} could not be registered: {e}"))
+}
+
 #[tauri::command]
-fn save_settings(settings: Settings) -> Result<(), String> {
-    config::save(&settings).map_err(|e| format!("{e:#}"))
+fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+    config::save(&settings).map_err(|e| format!("{e:#}"))?;
+    apply_hotkey(&app, &settings.hotkey)
+}
+
+/// Suspends the global shortcut while the settings window records a new one.
+/// Otherwise the OS delivers the current combination to the shortcut handler
+/// instead of the web view, and pressing it starts a dictation.
+#[tauri::command]
+fn pause_hotkey(app: tauri::AppHandle, paused: bool) -> Result<(), String> {
+    if paused {
+        app.global_shortcut()
+            .unregister_all()
+            .map_err(|e| format!("{e}"))
+    } else {
+        apply_hotkey(&app, &config::load().hotkey)
+    }
 }
 
 #[tauri::command]
@@ -157,12 +185,16 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Dictation");
             }
-            let _ = app.global_shortcut().register("Alt+Command+KeyD");
+            let settings = config::load();
+            if let Err(error) = apply_hotkey(app.handle(), &settings.hotkey) {
+                eprintln!("global shortcut unavailable: {error}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
+            pause_hotkey,
             list_models,
             download_model,
             has_api_key,
@@ -175,4 +207,37 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    /// One code from every group the settings UI can capture (`CAPTURABLE_CODE`
+    /// in src/main.ts). If the parser rejects one, the UI would save a shortcut
+    /// that can never be registered.
+    #[test]
+    fn captured_shortcuts_parse() {
+        let codes = [
+            "KeyA", "KeyZ", "Digit0", "Digit9", "F1", "F12", "F24", "Space", "Enter", "Tab",
+            "Backquote", "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash",
+            "Semicolon", "Quote", "Comma", "Period", "Slash", "ArrowUp", "ArrowDown",
+            "ArrowLeft", "ArrowRight", "Numpad0", "Numpad9",
+        ];
+        let modifiers = ["Control", "Alt", "Shift", "Command", "Control+Alt+Shift+Command"];
+
+        for modifier in modifiers {
+            for code in codes {
+                let accelerator = format!("{modifier}+{code}");
+                assert!(
+                    Shortcut::from_str(&accelerator).is_ok(),
+                    "{accelerator} should parse"
+                );
+            }
+        }
+
+        // Guards against a parser that accepts anything.
+        assert!(Shortcut::from_str("Control+NotAKey").is_err());
+    }
 }

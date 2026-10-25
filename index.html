@@ -35,12 +35,15 @@
       <main>
         <section class="panel active" id="panel-general">
           <h2>General</h2>
-          <p class="hint">Hold the shortcut, speak, release. Text goes to your cursor.</p>
+          <p class="hint">Press the shortcut to start, press it again to stop. Text goes to your cursor.</p>
 
-          <label class="field">
+          <div class="field">
             <span>Shortcut</span>
-            <input id="hotkey" type="text" placeholder="Alt+Command+KeyD" />
-          </label>
+            <button id="hotkey" class="shortcut" type="button">
+              <span id="hotkey-value">—</span>
+              <span id="hotkey-hint" class="shortcut-hint">Click to change</span>
+            </button>
+          </div>
 
           <label class="field">
             <span>Language</span>
@@ -50,7 +53,7 @@
           </label>
 
           <div class="field">
-            <span>When you release</span>
+            <span>When you stop</span>
             <div class="segmented" id="insert-mode">
               <button data-mode="paste">Paste at cursor</button>
               <button data-mode="clipboard">Copy to clipboard</button>
