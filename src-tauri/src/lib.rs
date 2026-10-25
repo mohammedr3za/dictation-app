@@ -7,7 +7,7 @@ use config::{InsertMode, Settings};
 use dictation::Dictation;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[derive(Serialize, Clone)]
 struct DownloadProgress {
@@ -185,7 +185,14 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Dictation");
             }
-            let settings = config::load();
+            let mut settings = config::load();
+            // Older versions let the shortcut be typed by hand, so a saved value may
+            // not parse at all. Replace it rather than start with no shortcut.
+            if settings.hotkey.parse::<Shortcut>().is_err() {
+                eprintln!("saved shortcut {:?} is invalid; using the default", settings.hotkey);
+                settings.hotkey = Settings::default().hotkey;
+                let _ = config::save(&settings);
+            }
             if let Err(error) = apply_hotkey(app.handle(), &settings.hotkey) {
                 eprintln!("global shortcut unavailable: {error}");
             }
