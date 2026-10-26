@@ -114,6 +114,34 @@ pub fn to_mono_16k(samples: &[f32], rate: u32, channels: u16) -> Vec<f32> {
     out
 }
 
+/// Asks macOS to list this app under Privacy & Security → Accessibility, which
+/// pasting needs. Shows the system prompt while the app is not yet allowed and
+/// returns whether it is.
+#[cfg(target_os = "macos")]
+pub fn request_accessibility() -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::string::CFString;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+    }
+
+    let options = CFDictionary::from_CFType_pairs(&[(
+        CFString::new("AXTrustedCheckOptionPrompt"),
+        CFBoolean::true_value(),
+    )]);
+    // SAFETY: the dictionary outlives the call.
+    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_accessibility() -> bool {
+    true
+}
+
 /// Puts text on the clipboard and, when `paste` is true, sends the paste shortcut.
 pub fn insert(text: &str, paste: bool) -> Result<()> {
     use arboard::Clipboard;
@@ -143,11 +171,16 @@ pub fn insert(text: &str, paste: bool) -> Result<()> {
     Ok(())
 }
 
+struct LoadedEngine {
+    model_id: String,
+    engine: AsrEngine,
+}
+
 /// Owns the recording session and the loaded recognizer.
 #[derive(Default)]
 pub struct Dictation {
     recorder: Mutex<Option<Recorder>>,
-    engine: Mutex<Option<AsrEngine>>,
+    engine: Mutex<Option<LoadedEngine>>,
 }
 
 impl Dictation {
@@ -187,18 +220,42 @@ impl Dictation {
         }
 
         let pcm = to_mono_16k(&samples, rate, channels);
-        let engine = self.engine_for_current_model()?;
-        let engine = engine.as_ref().ok_or_else(|| anyhow!("no recognizer"))?;
-        engine.transcribe(&pcm, 16_000)
+        let loaded = self.engine_for_current_model()?;
+        let loaded = loaded.as_ref().ok_or_else(|| anyhow!("no recognizer"))?;
+        loaded.engine.transcribe(&pcm, 16_000)
     }
 
-    fn engine_for_current_model(&self) -> Result<std::sync::MutexGuard<'_, Option<AsrEngine>>> {
+    /// Loads the selected model ahead of the first dictation, which would
+    /// otherwise wait for it (about two seconds for Parakeet).
+    pub fn preload(&self) -> Result<()> {
+        self.engine_for_current_model().map(|_| ())
+    }
+
+    /// Frees the recognizer if it was loaded from `model_id`.
+    pub fn unload_model(&self, model_id: &str) {
+        if let Ok(mut guard) = self.engine.lock() {
+            if guard.as_ref().is_some_and(|loaded| loaded.model_id == model_id) {
+                *guard = None;
+            }
+        }
+    }
+
+    /// Returns the recognizer for the model selected in settings, loading it
+    /// when nothing is loaded yet or the selection changed.
+    fn engine_for_current_model(&self) -> Result<std::sync::MutexGuard<'_, Option<LoadedEngine>>> {
         let mut guard = self.engine.lock().map_err(|_| anyhow!("state poisoned"))?;
-        if guard.is_none() {
-            let settings = config::load();
-            let dir = models::model_dir(&settings.model_id);
-            let files = asr::ModelFiles::discover(&dir)?;
-            *guard = Some(AsrEngine::new(&files, 4)?);
+        let model_id = config::load().model_id;
+        if guard.as_ref().map(|loaded| loaded.model_id.as_str()) != Some(model_id.as_str()) {
+            // Drop the old model first so two are never in memory at once.
+            *guard = None;
+            if !models::is_installed(&model_id) {
+                return Err(anyhow!("No speech model installed. Download one in the Model tab."));
+            }
+            let files = asr::ModelFiles::discover(&models::model_dir(&model_id))?;
+            *guard = Some(LoadedEngine {
+                engine: AsrEngine::new(&files, 4)?,
+                model_id,
+            });
         }
         Ok(guard)
     }

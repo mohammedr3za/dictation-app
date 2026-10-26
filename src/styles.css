@@ -230,6 +230,35 @@ button.primary:hover { background: #eab04d; }
 button.primary:active { background: var(--amber-dim); color: #fff5e4; }
 button.primary:disabled { opacity: 0.35; cursor: default; background: var(--surface-3); color: var(--muted); }
 
+button.secondary {
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.15s, color 0.15s;
+}
+button.secondary:hover { border-color: #3a352b; color: var(--text); }
+button.secondary.danger { border-color: #c2563d; color: #e0775c; }
+button.secondary:disabled { opacity: 0.4; cursor: default; }
+
+.tag {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 650;
+  vertical-align: 1px;
+  color: var(--amber);
+  background: rgba(224, 161, 58, 0.16);
+}
+
+.problem { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: #e0775c; }
+.problem.hidden { display: none; }
+
 .toggle { display: flex; align-items: center; gap: 11px; margin-bottom: 22px; font-size: 13px; cursor: pointer; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--amber); }
 

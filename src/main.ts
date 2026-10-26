@@ -18,6 +18,7 @@ interface ModelInfo {
   name: string;
   note: string;
   size_mb: number;
+  recommended: boolean;
   installed: boolean;
 }
 
@@ -25,8 +26,6 @@ let settings: Settings;
 let insertMode: InsertMode = "paste";
 let platform = "linux";
 
-// The global shortcut plugin needs a non-modifier key, so a chord of only
-// modifiers cannot be registered — capture rejects it here too.
 const MODIFIER_CODES = new Set([
   "ControlLeft",
   "ControlRight",
@@ -44,26 +43,47 @@ const MODIFIER_CODES = new Set([
 const CAPTURABLE_CODE =
   /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Enter|Tab|Backquote|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Arrow(Up|Down|Left|Right)|Numpad[0-9])$/;
 
-function displayHotkey(accelerator: string): string {
-  const parts = accelerator.split("+");
-  const key = parts[parts.length - 1] ?? "";
-  const isMac = platform === "macos";
+// Keys that type a character. With one modifier they collide with typing or
+// app shortcuts (⌘X, ⇧K, Ctrl+C), so they need two.
+const CHARACTER_CODE =
+  /^(Key[A-Z]|Digit[0-9]|Numpad[0-9]|Backquote|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash)$/;
 
-  const labels: Record<string, string> = isMac
+function modifierLabels(): Record<string, string> {
+  return platform === "macos"
     ? { Control: "⌃", Alt: "⌥", Shift: "⇧", Command: "⌘" }
     : { Control: "Ctrl", Alt: "Alt", Shift: "Shift", Command: "Super" };
+}
+
+function displayHotkey(accelerator: string): string {
+  const parts = accelerator.split("+");
+  const labels = modifierLabels();
+  const separator = platform === "macos" ? "" : "+";
+
+  // A modifier-only shortcut such as "Alt+Command" has no key part.
+  const last = parts[parts.length - 1] ?? "";
+  if (last in labels) {
+    return parts.map((modifier) => labels[modifier] ?? modifier).join(separator);
+  }
 
   const modifiers = parts.slice(0, -1).map((modifier) => labels[modifier] ?? modifier);
-  const keyLabel = key
+  const keyLabel = last
     .replace(/^Key/, "")
     .replace(/^Digit/, "")
     .replace(/^Numpad/, "Num");
-
-  return [...modifiers, keyLabel].join(isMac ? "" : "+");
+  return [...modifiers, keyLabel].join(separator);
 }
 
 function modifierNames(): string {
   return platform === "macos" ? "⌘, ⌥, ⌃ or ⇧" : "Ctrl, Alt, Shift or Super";
+}
+
+function heldModifiers(event: KeyboardEvent): string[] {
+  const modifiers: string[] = [];
+  if (event.ctrlKey) modifiers.push("Control");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+  if (event.metaKey) modifiers.push("Command");
+  return modifiers;
 }
 
 const el = <T extends HTMLElement>(selector: string): T =>
@@ -82,6 +102,9 @@ function setStatus(text: string) {
 // ---------- shortcut capture ----------
 
 let capturing = false;
+// The most modifiers held at once during this capture; a modifier-only
+// shortcut is taken from it once they are all released.
+let peakModifiers: string[] = [];
 
 const hotkeyButton = (): HTMLButtonElement => el<HTMLButtonElement>("#hotkey");
 
@@ -89,10 +112,17 @@ function renderHotkey() {
   el("#hotkey-value").textContent = displayHotkey(settings.hotkey);
 }
 
+function showHotkeyProblem(problem: string | null) {
+  const line = el("#hotkey-problem");
+  line.textContent = problem ?? "";
+  line.classList.toggle("hidden", !problem);
+}
+
 function startCapture() {
   capturing = true;
+  peakModifiers = [];
   hotkeyButton().classList.add("capturing");
-  el("#hotkey-hint").textContent = "Hold a modifier and press a key…";
+  el("#hotkey-hint").textContent = "Press modifiers, with or without a key…";
   hotkeyButton().focus();
   invoke("pause_hotkey", { paused: true }).catch(console.error);
 }
@@ -109,6 +139,14 @@ function stopCapture(hint = "Click to change") {
   el("#hotkey-hint").textContent = hint;
 }
 
+function captured(accelerator: string) {
+  settings.hotkey = accelerator;
+  renderHotkey();
+  stopCapture("Unsaved — click Save");
+}
+
+// ---------- models ----------
+
 async function renderModels() {
   const models = await invoke<ModelInfo[]>("list_models");
   const container = el<HTMLDivElement>("#models");
@@ -122,7 +160,7 @@ async function renderModels() {
     head.className = "card-head";
     head.innerHTML = `
       <div>
-        <h3>${model.name}</h3>
+        <h3>${model.name}${model.recommended ? ' <span class="tag">Recommended</span>' : ""}</h3>
         <p>${model.note}</p>
       </div>
       <span class="badge ${model.installed ? "ok" : ""}">${model.installed ? "Installed" : model.size_mb + " MB"}</span>`;
@@ -138,11 +176,40 @@ async function renderModels() {
       use.disabled = model.id === settings.model_id;
       use.addEventListener("click", async () => {
         settings.model_id = model.id;
-        await invoke("save_settings", { settings });
+        await invoke("save_settings", { settings }).catch(console.error);
         setStatus(`Using ${model.name}`);
         await renderModels();
       });
       actions.appendChild(use);
+
+      // Two clicks, so a stray one cannot throw away a 460 MB download.
+      const remove = document.createElement("button");
+      remove.className = "secondary";
+      remove.textContent = "Delete";
+      let armed = false;
+      remove.addEventListener("click", async () => {
+        if (!armed) {
+          armed = true;
+          remove.textContent = "Click again to delete";
+          remove.classList.add("danger");
+          setTimeout(() => {
+            armed = false;
+            remove.textContent = "Delete";
+            remove.classList.remove("danger");
+          }, 3000);
+          return;
+        }
+        remove.disabled = true;
+        try {
+          await invoke("delete_model", { id: model.id });
+          setStatus(`${model.name} deleted`);
+        } catch (error) {
+          setStatus("Delete failed");
+          console.error(error);
+        }
+        await renderModels();
+      });
+      actions.appendChild(remove);
     } else {
       const download = document.createElement("button");
       download.className = "primary";
@@ -154,7 +221,7 @@ async function renderModels() {
         try {
           await invoke("download_model", { id: model.id });
           settings.model_id = model.id;
-          await invoke("save_settings", { settings });
+          await invoke("save_settings", { settings }).catch(console.error);
           setStatus(`${model.name} installed`);
         } catch (error) {
           setStatus("Download failed");
@@ -184,6 +251,7 @@ async function load() {
   insertMode = settings.insert_mode;
   renderInsertMode();
   renderHotkey();
+  showHotkeyProblem(await invoke<string | null>("hotkey_status"));
 
   await renderModels();
 }
@@ -226,27 +294,28 @@ window.addEventListener("DOMContentLoaded", async () => {
         stopCapture();
         return;
       }
-      if (MODIFIER_CODES.has(event.code)) return;
+
+      const modifiers = heldModifiers(event);
+      if (MODIFIER_CODES.has(event.code)) {
+        if (modifiers.length >= peakModifiers.length) peakModifiers = modifiers;
+        return;
+      }
 
       if (!CAPTURABLE_CODE.test(event.code)) {
         el("#hotkey-hint").textContent = "That key can't be used — try another";
         return;
       }
-
-      const modifiers: string[] = [];
-      if (event.ctrlKey) modifiers.push("Control");
-      if (event.altKey) modifiers.push("Alt");
-      if (event.shiftKey) modifiers.push("Shift");
-      if (event.metaKey) modifiers.push("Command");
-
       if (modifiers.length === 0) {
         el("#hotkey-hint").textContent = `Add ${modifierNames()} to the key`;
         return;
       }
+      if (CHARACTER_CODE.test(event.code) && modifiers.length < 2) {
+        el("#hotkey-hint").textContent =
+          `Letters need two modifiers, like ${displayHotkey("Alt+Command+KeyK")}`;
+        return;
+      }
 
-      settings.hotkey = [...modifiers, event.code].join("+");
-      renderHotkey();
-      stopCapture("Unsaved — click Save");
+      captured([...modifiers, event.code].join("+"));
     },
     true,
   );
@@ -255,9 +324,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     "keyup",
     (event) => {
       if (!capturing || !MODIFIER_CODES.has(event.code)) return;
-      // The last modifier came up with no key in between, so they were pressed alone.
-      if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
-        el("#hotkey-hint").textContent = "Modifiers alone can't be a shortcut — add a key";
+      // Wait until the last modifier is released, with no key pressed meanwhile.
+      if (heldModifiers(event).length > 0) return;
+
+      const chord = peakModifiers;
+      peakModifiers = [];
+      if (chord.length >= 2) {
+        captured(chord.join("+"));
+      } else {
+        el("#hotkey-hint").textContent =
+          `Use two modifiers, like ${displayHotkey("Alt+Command")}, or add a key`;
       }
     },
     true,
@@ -273,11 +349,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       await invoke("save_settings", { settings });
       setStatus("Saved");
+      showHotkeyProblem(null);
       stopCapture();
     } catch (error) {
-      // The setting is stored, but the combination is owned by another app.
-      setStatus(`Shortcut inactive: ${error}`);
-      el("#hotkey-hint").textContent = "In use by another app — click to change";
+      // The setting is stored, but the shortcut could not be activated.
+      setStatus("Saved, shortcut inactive");
+      showHotkeyProblem(String(error));
     }
   });
 
@@ -311,6 +388,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await listen<boolean>("recording", (event) => {
     recording = event.payload;
     recordButton.textContent = recording ? "Stop recording" : "Start recording";
+    if (recording) transcriptState.textContent = "Listening…";
   });
 
   await listen<string>("transcript", (event) => {

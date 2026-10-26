@@ -27,5 +27,11 @@ fn main() {
         }
     }
 
+    // Prints "tap" for each tap of a modifier-only shortcut, e.g. Alt+Command.
+    if let Some(index) = args.iter().position(|a| a == "--watch-hotkey") {
+        let chord = args.get(index + 1).map(String::as_str).unwrap_or("Alt+Command");
+        std::process::exit(dictation_app_lib::hotkey::watch_cli(chord));
+    }
+
     dictation_app_lib::run()
 }

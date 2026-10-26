@@ -1051,6 +1051,8 @@ dependencies = [
  "anyhow",
  "arboard",
  "bzip2 0.6.1",
+ "core-foundation",
+ "core-graphics",
  "cpal",
  "dirs",
  "enigo",
@@ -1065,6 +1067,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "ureq 3.5.0",
+ "x11rb",
 ]
 
 [[package]]

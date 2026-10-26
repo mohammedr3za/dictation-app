@@ -1,11 +1,13 @@
 pub mod asr;
 pub mod config;
 pub mod dictation;
+pub mod hotkey;
 pub mod models;
 
 use config::{InsertMode, Settings};
 use dictation::Dictation;
 use serde::Serialize;
+use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -15,36 +17,73 @@ struct DownloadProgress {
     total: u64,
 }
 
+/// Why the saved shortcut is inactive, if it is.
+#[derive(Default)]
+struct HotkeyStatus(Mutex<Option<String>>);
+
 #[tauri::command]
 fn load_settings() -> Settings {
     config::load()
 }
 
-/// Replaces whatever global shortcut is registered with `accelerator`.
+fn is_valid_hotkey(accelerator: &str) -> bool {
+    hotkey::parse_chord(accelerator).is_some() || accelerator.parse::<Shortcut>().is_ok()
+}
+
+/// Replaces whatever shortcut is active with `accelerator`. A modifier-only
+/// chord goes to the keyboard monitor; anything with a key goes to the OS
+/// hotkey API through the global shortcut plugin.
 ///
-/// Fails when the combination cannot be registered, which happens when another
-/// app already owns it. The setting is saved regardless, so the caller can report
-/// that the shortcut is inactive and let the user pick another.
+/// Fails when another app owns the combination, or when macOS has not granted
+/// Input Monitoring. The setting is saved regardless, so the UI can say why the
+/// shortcut is inactive.
 fn apply_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    shortcuts
-        .register(accelerator)
-        .map_err(|e| format!("{accelerator} could not be registered: {e}"))
+    let monitor = app.state::<hotkey::ModifierMonitor>();
+    let result = match hotkey::parse_chord(accelerator) {
+        Some(chord) => monitor.watch(Some(chord)),
+        None => {
+            let _ = monitor.watch(None);
+            shortcuts
+                .register(accelerator)
+                .map_err(|e| format!("{accelerator} could not be registered: {e}"))
+        }
+    };
+    if let Ok(mut status) = app.state::<HotkeyStatus>().0.lock() {
+        *status = result.clone().err();
+    }
+    result
+}
+
+/// Loads the selected model in the background, so the first dictation after
+/// launch or after switching models does not wait for it.
+fn preload_model(app: &tauri::AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = app.state::<Dictation>().preload();
+    });
 }
 
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
     config::save(&settings).map_err(|e| format!("{e:#}"))?;
+    preload_model(&app);
     apply_hotkey(&app, &settings.hotkey)
 }
 
-/// Suspends the global shortcut while the settings window records a new one.
-/// Otherwise the OS delivers the current combination to the shortcut handler
-/// instead of the web view, and pressing it starts a dictation.
+#[tauri::command]
+fn hotkey_status(status: tauri::State<HotkeyStatus>) -> Option<String> {
+    status.0.lock().ok().and_then(|status| status.clone())
+}
+
+/// Suspends the shortcut while the settings window records a new one.
+/// Otherwise the current combination reaches the shortcut handler instead of
+/// the web view, and pressing it starts a dictation.
 #[tauri::command]
 fn pause_hotkey(app: tauri::AppHandle, paused: bool) -> Result<(), String> {
     if paused {
+        let _ = app.state::<hotkey::ModifierMonitor>().watch(None);
         app.global_shortcut()
             .unregister_all()
             .map_err(|e| format!("{e}"))
@@ -70,6 +109,12 @@ async fn download_model(app: tauri::AppHandle, id: String) -> Result<String, Str
     })
     .await
     .map_err(|e| format!("{e}"))?
+}
+
+#[tauri::command]
+fn delete_model(dictation: tauri::State<Dictation>, id: String) -> Result<(), String> {
+    dictation.unload_model(&id);
+    models::delete(&id).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -139,32 +184,49 @@ fn is_recording(dictation: tauri::State<Dictation>) -> bool {
     dictation.is_recording()
 }
 
+/// Starts or stops a dictation from the shortcut, on its own thread:
+/// transcription takes up to a second and must not stall the window or the
+/// keyboard monitor.
 fn toggle(app: &tauri::AppHandle) {
-    let dictation = app.state::<Dictation>();
-    if dictation.is_recording() {
-        match dictation.stop() {
-            Ok(text) if !text.is_empty() => {
-                let settings = config::load();
-                let paste = settings.insert_mode == InsertMode::Paste;
-                let _ = dictation::insert(&text, paste);
-                let _ = app.emit("transcript", text);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let dictation = app.state::<Dictation>();
+        if dictation.is_recording() {
+            let result = dictation.stop();
+            let _ = app.emit("recording", false);
+            match result {
+                Ok(text) if !text.is_empty() => deliver(&app, text),
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = app.emit("dictation-error", format!("{error:#}"));
+                }
             }
-            Ok(_) => {}
-            Err(error) => {
-                let _ = app.emit("dictation-error", format!("{error:#}"));
+        } else {
+            match dictation.start() {
+                Ok(()) => {
+                    let _ = app.emit("recording", true);
+                }
+                Err(error) => {
+                    let _ = app.emit("dictation-error", format!("{error:#}"));
+                }
             }
         }
-        let _ = app.emit("recording", false);
-    } else {
-        match dictation.start() {
-            Ok(()) => {
-                let _ = app.emit("recording", true);
-            }
-            Err(error) => {
-                let _ = app.emit("dictation-error", format!("{error:#}"));
-            }
+    });
+}
+
+/// Inserts the transcript on the main thread: typing the paste shortcut looks
+/// up the keyboard layout, which macOS only allows there.
+fn deliver(app: &tauri::AppHandle, text: String) {
+    let paste = config::load().insert_mode == InsertMode::Paste;
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || match dictation::insert(&text, paste) {
+        Ok(()) => {
+            let _ = handle.emit("transcript", text);
         }
-    }
+        Err(error) => {
+            let _ = handle.emit("dictation-error", format!("{error:#}"));
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -181,29 +243,48 @@ pub fn run() {
                 .build(),
         )
         .manage(Dictation::default())
+        .manage(HotkeyStatus::default())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Dictation");
             }
+            let handle = app.handle().clone();
+            app.manage(hotkey::ModifierMonitor::new(move || toggle(&handle)));
+
             let mut settings = config::load();
             // Older versions let the shortcut be typed by hand, so a saved value may
             // not parse at all. Replace it rather than start with no shortcut.
-            if settings.hotkey.parse::<Shortcut>().is_err() {
+            if !is_valid_hotkey(&settings.hotkey) {
                 eprintln!("saved shortcut {:?} is invalid; using the default", settings.hotkey);
                 settings.hotkey = Settings::default().hotkey;
                 let _ = config::save(&settings);
             }
             if let Err(error) = apply_hotkey(app.handle(), &settings.hotkey) {
-                eprintln!("global shortcut unavailable: {error}");
+                eprintln!("shortcut unavailable: {error}");
             }
+            // An update gets a new signature, so macOS drops it from the list.
+            if settings.insert_mode == InsertMode::Paste && !dictation::request_accessibility() {
+                eprintln!("pasting needs Accessibility permission");
+            }
+
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                // Older versions kept unused full-precision weights on disk.
+                for id in models::installed() {
+                    models::prune(&models::model_dir(id));
+                }
+                let _ = handle.state::<Dictation>().preload();
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
+            hotkey_status,
             pause_hotkey,
             list_models,
             download_model,
+            delete_model,
             has_api_key,
             save_api_key,
             app_info,
@@ -246,5 +327,12 @@ mod tests {
 
         // Guards against a parser that accepts anything.
         assert!(Shortcut::from_str("Control+NotAKey").is_err());
+    }
+
+    #[test]
+    fn default_shortcut_is_valid() {
+        assert!(super::is_valid_hotkey(&crate::config::Settings::default().hotkey));
+        assert!(super::is_valid_hotkey("Alt+Command+KeyD"));
+        assert!(!super::is_valid_hotkey("Command"));
     }
 }

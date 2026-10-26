@@ -24,8 +24,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            model_id: "zipformer-en".into(),
-            hotkey: "Alt+Command+KeyD".into(),
+            model_id: "parakeet-tdt-0.6b-v2".into(),
+            hotkey: "Alt+Command".into(),
             language: "en".into(),
             insert_mode: InsertMode::Paste,
             cleanup_enabled: false,
