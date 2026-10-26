@@ -29,6 +29,11 @@ impl Recorder {
         let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(16000 * 30)));
         let sink = Arc::clone(&samples);
 
+        crate::logfile::line(format!(
+            "mic: {} at {sample_rate} Hz, {channels} ch, {format:?}",
+            device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "unknown".into())
+        ));
+
         let stream = match format {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 config,
@@ -220,9 +225,22 @@ impl Dictation {
         }
 
         let pcm = to_mono_16k(&samples, rate, channels);
+        // A peak of zero means the OS handed over silence, which is what a
+        // denied microphone permission looks like.
+        let peak = pcm.iter().fold(0f32, |peak, sample| peak.max(sample.abs()));
+        crate::logfile::line(format!("captured {:.1} s, peak level {peak:.3}", pcm.len() as f32 / 16_000.0));
+
+        let started = std::time::Instant::now();
         let loaded = self.engine_for_current_model()?;
         let loaded = loaded.as_ref().ok_or_else(|| anyhow!("no recognizer"))?;
-        loaded.engine.transcribe(&pcm, 16_000)
+        let text = loaded.engine.transcribe(&pcm, 16_000)?;
+        crate::logfile::line(format!(
+            "transcribed with {} in {} ms: {} chars",
+            loaded.model_id,
+            started.elapsed().as_millis(),
+            text.chars().count()
+        ));
+        Ok(text)
     }
 
     /// Loads the selected model ahead of the first dictation, which would

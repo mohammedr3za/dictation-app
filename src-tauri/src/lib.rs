@@ -2,6 +2,7 @@ pub mod asr;
 pub mod config;
 pub mod dictation;
 pub mod hotkey;
+pub mod logfile;
 pub mod models;
 
 use config::{InsertMode, Settings};
@@ -50,6 +51,10 @@ fn apply_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), String>
                 .map_err(|e| format!("{accelerator} could not be registered: {e}"))
         }
     };
+    match &result {
+        Ok(()) => logfile::line(format!("shortcut {accelerator}: active")),
+        Err(error) => logfile::line(format!("shortcut {accelerator}: {error}")),
+    }
     if let Ok(mut status) = app.state::<HotkeyStatus>().0.lock() {
         *status = result.clone().err();
     }
@@ -196,17 +201,20 @@ fn toggle(app: &tauri::AppHandle) {
             let _ = app.emit("recording", false);
             match result {
                 Ok(text) if !text.is_empty() => deliver(&app, text),
-                Ok(_) => {}
+                Ok(_) => logfile::line("no speech recognized"),
                 Err(error) => {
+                    logfile::line(format!("stop failed: {error:#}"));
                     let _ = app.emit("dictation-error", format!("{error:#}"));
                 }
             }
         } else {
             match dictation.start() {
                 Ok(()) => {
+                    logfile::line("recording started");
                     let _ = app.emit("recording", true);
                 }
                 Err(error) => {
+                    logfile::line(format!("recording failed: {error:#}"));
                     let _ = app.emit("dictation-error", format!("{error:#}"));
                 }
             }
@@ -221,9 +229,11 @@ fn deliver(app: &tauri::AppHandle, text: String) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || match dictation::insert(&text, paste) {
         Ok(()) => {
+            logfile::line(format!("inserted {} chars (paste={paste})", text.chars().count()));
             let _ = handle.emit("transcript", text);
         }
         Err(error) => {
+            logfile::line(format!("insert failed: {error:#}"));
             let _ = handle.emit("dictation-error", format!("{error:#}"));
         }
     });
@@ -237,6 +247,7 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
+                        logfile::line("shortcut pressed");
                         toggle(app);
                     }
                 })
@@ -249,9 +260,19 @@ pub fn run() {
                 let _ = window.set_title("Dictation");
             }
             let handle = app.handle().clone();
-            app.manage(hotkey::ModifierMonitor::new(move || toggle(&handle)));
+            app.manage(hotkey::ModifierMonitor::new(move || {
+                logfile::line("shortcut tapped");
+                toggle(&handle);
+            }));
 
             let mut settings = config::load();
+            logfile::line(format!(
+                "start v{} on {} model={} insert={:?}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                settings.model_id,
+                settings.insert_mode
+            ));
             // Older versions let the shortcut be typed by hand, so a saved value may
             // not parse at all. Replace it rather than start with no shortcut.
             if !is_valid_hotkey(&settings.hotkey) {
@@ -259,12 +280,11 @@ pub fn run() {
                 settings.hotkey = Settings::default().hotkey;
                 let _ = config::save(&settings);
             }
-            if let Err(error) = apply_hotkey(app.handle(), &settings.hotkey) {
-                eprintln!("shortcut unavailable: {error}");
-            }
+            let _ = apply_hotkey(app.handle(), &settings.hotkey);
             // An update gets a new signature, so macOS drops it from the list.
-            if settings.insert_mode == InsertMode::Paste && !dictation::request_accessibility() {
-                eprintln!("pasting needs Accessibility permission");
+            if settings.insert_mode == InsertMode::Paste {
+                let trusted = dictation::request_accessibility();
+                logfile::line(format!("accessibility: {}", if trusted { "allowed" } else { "not allowed" }));
             }
 
             let handle = app.handle().clone();
@@ -273,7 +293,11 @@ pub fn run() {
                 for id in models::installed() {
                     models::prune(&models::model_dir(id));
                 }
-                let _ = handle.state::<Dictation>().preload();
+                let started = std::time::Instant::now();
+                match handle.state::<Dictation>().preload() {
+                    Ok(()) => logfile::line(format!("model loaded in {} ms", started.elapsed().as_millis())),
+                    Err(error) => logfile::line(format!("model not loaded: {error:#}")),
+                }
             });
             Ok(())
         })
