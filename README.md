@@ -48,12 +48,19 @@ sudo dnf install webkit2gtk4.1 alsa-lib
 ## First run
 
 Open **Model**, choose a speech model, and click **Download**. Models are fetched once from the
-sherpa-onnx release mirror and stored in your app data directory.
+sherpa-onnx release mirror.
 
-| Model | Size | Notes |
+| Model | Download | On disk | Notes |
+|---|---|---|---|
+| Parakeet TDT 0.6B v2 (recommended) | 460 MB | 630 MB | Most accurate, punctuation and capitals |
+| Zipformer English | 293 MB | 70 MB | Fastest, lower accuracy, all capitals, no punctuation |
+
+Models live here; delete one with the **Delete** button in the Model tab, or remove its folder:
+
+| OS | Models | Settings |
 |---|---|---|
-| Zipformer English | ~293 MB | Fast, no punctuation |
-| Parakeet TDT 0.6B v2 | ~600 MB | Most accurate English |
+| macOS | `~/Library/Application Support/dictation-app/models/` | `~/Library/Application Support/dictation-app/settings.json` |
+| Linux | `~/.local/share/dictation-app/models/` | `~/.config/dictation-app/settings.json` |
 
 ## Build from source
 
@@ -91,13 +98,37 @@ npm run tauri dev
 ## Usage
 
 1. Download a model from the **Model** tab.
-2. Press **Alt+Command+D** (or click **Start recording**).
+2. Tap **Option+Command** (⌥⌘; Alt+Super on Linux), or click **Start recording**.
 3. Speak.
-4. Press the shortcut again to stop. The transcript is pasted at your cursor, or copied to the
-   clipboard if you chose that mode.
+4. Tap it again to stop. The transcript is pasted at your cursor, or copied to the clipboard if
+   you chose that mode.
 
-On macOS the first recording asks for microphone access. On Linux, X11 is supported; Wayland
-compositors may block global shortcuts and synthetic input.
+A tap means pressing both keys and letting go with nothing else in between, so shortcuts such as
+⌥⌘Esc keep working. To change it, click the shortcut in **General** and press a new one: two or
+more modifiers alone, or modifiers plus a key (letters need two modifiers).
+
+### Permissions
+
+macOS asks for these the first time they are needed. Allow **Dictation** in System Settings →
+Privacy & Security:
+
+| Permission | Needed for |
+|---|---|
+| Microphone | Recording |
+| Input Monitoring | Modifier-only shortcuts such as ⌥⌘ |
+| Accessibility | Pasting at the cursor |
+
+The builds are unsigned, so after an update macOS may list Dictation again as a new app. If the
+shortcut or paste stops working after updating, switch Dictation off and on again in those lists.
+
+On Linux, X11 is supported. Wayland does not let apps watch the keyboard or type into other apps,
+so use a shortcut with a key, the in-app button, and clipboard mode there.
+
+To check that a modifier-only shortcut is seen, without the app window:
+
+```bash
+dictation --watch-hotkey Alt+Command   # prints "tap" each time
+```
 
 ## Status
 
@@ -107,12 +138,13 @@ Working:
 - On-device model download and management
 - Offline transcription through sherpa-onnx
 - Microphone capture, resampling to 16 kHz
-- Global toggle shortcut (Alt+Command+D)
+- Global toggle shortcut, including modifier-only chords (default Option+Command)
 - Paste at cursor or copy to clipboard
+- Model download, switching, and deletion
 
 Not yet implemented:
 
-- Hold-to-talk (the current shortcut is press-to-start, press-to-stop)
+- Hold-to-talk (the current shortcut is tap-to-start, tap-to-stop)
 - Optional LLM cleanup
 - Tray icon
 
