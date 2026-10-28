@@ -19,6 +19,9 @@ pub struct Settings {
     pub cleanup_enabled: bool,
     pub cleanup_base_url: String,
     pub cleanup_model: String,
+    pub prompt_enabled: bool,
+    pub prompt_base_url: String,
+    pub prompt_model: String,
 }
 
 impl Default for Settings {
@@ -31,6 +34,9 @@ impl Default for Settings {
             cleanup_enabled: false,
             cleanup_base_url: "https://api.goedelmachines.com/v1".into(),
             cleanup_model: "deepseek/deepseek-v4.1-flash".into(),
+            prompt_enabled: false,
+            prompt_base_url: "https://api.goedelmachines.com/v1".into(),
+            prompt_model: "deepseek/deepseek-v4.1-flash".into(),
         }
     }
 }
@@ -58,4 +64,17 @@ pub fn save(settings: &Settings) -> Result<()> {
     let json = serde_json::to_string_pretty(settings)?;
     std::fs::write(settings_path(), json).context("writing settings")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_settings_fall_back_to_defaults() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.prompt_enabled);
+        assert_eq!(settings.prompt_base_url, "https://api.goedelmachines.com/v1");
+        assert_eq!(settings.prompt_model, "deepseek/deepseek-v4.1-flash");
+    }
 }
