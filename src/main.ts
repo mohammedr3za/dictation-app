@@ -391,7 +391,11 @@ window.addEventListener("DOMContentLoaded", async () => {
       prompt_model: el<HTMLInputElement>("#prompt-model").value.trim(),
     };
     try {
-      await invoke("save_settings", { settings: next });
+      await invoke("save_prompt_settings", {
+        promptEnabled: next.prompt_enabled,
+        promptBaseUrl: next.prompt_base_url,
+        promptModel: next.prompt_model,
+      });
     } catch (error) {
       showPromptProblem(String(error));
       setStatus("Prompt settings not saved");

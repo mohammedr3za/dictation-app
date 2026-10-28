@@ -89,10 +89,11 @@ pub fn plan(transcript: &str, enabled: bool, has_key: bool) -> PromptAction {
 fn strip_code_fence(text: &str) -> &str {
     if text.starts_with("```") && text.ends_with("```") && text.len() > 6 {
         let inner = &text[3..text.len() - 3];
-        let inner = inner
-            .strip_prefix("markdown")
-            .or_else(|| inner.strip_prefix("md"))
-            .unwrap_or(inner);
+        let inner = inner.trim_start();
+        let inner = match inner.find('\n') {
+            Some(newline) if !inner[..newline].contains('#') => &inner[newline + 1..],
+            _ => inner,
+        };
         return inner.trim();
     }
     text
@@ -325,6 +326,18 @@ mod tests {
     }
 
     #[test]
+    fn strips_any_info_string_on_a_wrapping_fence() {
+        assert_eq!(
+            validate_response("```json\n# Objective\nDo it.\n```").unwrap(),
+            "# Objective\nDo it."
+        );
+        assert_eq!(
+            validate_response("```md5\n# Objective\n```").unwrap(),
+            "# Objective"
+        );
+    }
+
+    #[test]
     fn keeps_a_fence_that_does_not_wrap_the_response() {
         let text = validate_response("Here you go:\n```\n# Objective\nDo it.\n```").unwrap();
         assert!(text.contains("```"));
@@ -338,14 +351,44 @@ mod http_tests {
     use std::net::TcpListener;
     use std::time::Duration;
 
-    fn serve(response: String) -> (String, std::thread::JoinHandle<()>) {
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        let mut data = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+            data.extend_from_slice(&buffer[..read]);
+            if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&data[..end]);
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        if name.eq_ignore_ascii_case("content-length") {
+                            value.trim().parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                if data.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&data).to_string()
+    }
+
+    fn serve(response: String) -> (String, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0u8; 8192];
-            let _ = stream.read(&mut buffer);
+            let request = read_request(&mut stream);
             let _ = stream.write_all(response.as_bytes());
+            request
         });
         (format!("http://{address}/v1"), handle)
     }
@@ -364,7 +407,21 @@ mod http_tests {
         let client = PromptClient::new(base, "test-model".into(), "test-key".into(), Duration::from_secs(2));
         let result = client.structure("write a poem").unwrap();
         assert!(result.starts_with("# Objective"));
-        server.join().unwrap();
+        let request = server.join().unwrap();
+        assert!(
+            request.starts_with("POST /v1/chat/completions "),
+            "request line: {}",
+            request.lines().next().unwrap_or("")
+        );
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("authorization: bearer test-key"));
+        assert!(lower.contains("content-type: application/json"));
+        assert!(request.contains("\"model\":\"test-model\""));
+        assert!(request.contains("\"temperature\":0.2"));
+        assert!(request.contains("\"max_tokens\":1200"));
+        assert!(request.contains("\"stream\":false"));
+        assert!(request.contains("\"role\":\"system\""));
+        assert!(request.contains("\"role\":\"user\""));
     }
 
     #[test]
