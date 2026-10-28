@@ -1,10 +1,16 @@
-# Dictation
+<h1 align="center">Dictation</h1>
+<p align="center">Fast, local, cross-platform dictation.</p>
 
-Fast, local, cross-platform dictation. Hold a shortcut, speak, release — your words appear at the cursor.
+<p align="center">
+  <img alt="Rust" src="https://img.shields.io/badge/rust-stable-CE422B">
+  <img alt="Tauri 2" src="https://img.shields.io/badge/tauri-2-24C8DB">
+  <img alt="macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-CC785C">
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-CC785C">
+</p>
 
-Speech is transcribed **on your machine** with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). No audio is uploaded, ever. Cleanup with an LLM is optional and off by default.
-
-Built with Tauri 2, Rust, and TypeScript, so the same app runs on macOS and Linux.
+Hold a shortcut, speak, release — your words appear at the cursor. Speech is
+transcribed **on your machine** with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx);
+no audio is uploaded. Built with Tauri 2, Rust and TypeScript for macOS and Linux.
 
 ## Install
 
