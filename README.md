@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src-tauri/icons/icon.png" alt="Dictation app icon" width="128">
+</p>
+
 <h1 align="center">Dictation</h1>
 <p align="center">Fast, local, cross-platform dictation.</p>
 
