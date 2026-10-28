@@ -1,6 +1,7 @@
 //! Trigger detection, routing, and response validation for spoken prompt generation.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::time::Duration;
 
 pub const META_PROMPT: &str = "\
 You convert a rough spoken idea into one precise, token-efficient prompt for an AI model.
@@ -119,6 +120,94 @@ pub fn validate_response(raw: &str) -> Result<String> {
     Ok(text.to_string())
 }
 
+const KEYCHAIN_SERVICE: &str = "dictation-app";
+const KEYCHAIN_ACCOUNT: &str = "prompt-api-key";
+
+pub fn validate_base_url(base: &str) -> Result<()> {
+    let lower = base.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") && lower.len() > "https://".len() {
+        return Ok(());
+    }
+    if let Some(rest) = lower.strip_prefix("http://") {
+        let host = rest.split(['/', ':']).next().unwrap_or("");
+        let local = matches!(host, "localhost" | "127.0.0.1") || rest.starts_with("[::1]");
+        if local {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("the endpoint must use https, except for localhost")
+}
+
+pub struct PromptClient {
+    base_url: String,
+    model: String,
+    key: String,
+    timeout: Duration,
+}
+
+impl PromptClient {
+    pub fn new(base_url: String, model: String, key: String, timeout: Duration) -> Self {
+        Self { base_url, model, key, timeout }
+    }
+
+    pub fn structure(&self, payload: &str) -> Result<String> {
+        validate_base_url(&self.base_url)?;
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "model": self.model,
+            "temperature": 0.2,
+            "max_tokens": 1200,
+            "stream": false,
+            "messages": [
+                { "role": "system", "content": META_PROMPT },
+                { "role": "user", "content": payload },
+            ],
+        });
+        let body = serde_json::to_string(&body).context("encoding the request")?;
+
+        let config = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(3)))
+            .timeout_global(Some(self.timeout))
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+
+        let mut response = agent
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.key))
+            .header("Content-Type", "application/json")
+            .send(body)
+            .context("calling the prompt endpoint")?;
+        let text = response
+            .body_mut()
+            .read_to_string()
+            .context("reading the response")?;
+        let json: serde_json::Value = serde_json::from_str(&text).context("parsing the response")?;
+        let content = json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or_default();
+        validate_response(content)
+    }
+}
+
+pub fn stored_key() -> Option<String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|key| !key.is_empty())
+}
+
+pub fn save_key(key: &str) -> Result<()> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?;
+    if key.is_empty() {
+        let _ = entry.delete_credential();
+        Ok(())
+    } else {
+        entry.set_password(key)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +312,97 @@ mod tests {
     fn keeps_a_fence_that_does_not_wrap_the_response() {
         let text = validate_response("Here you go:\n```\n# Objective\nDo it.\n```").unwrap();
         assert!(text.contains("```"));
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    fn serve(response: String) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let _ = stream.read(&mut buffer);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (format!("http://{address}/v1"), handle)
+    }
+
+    fn http(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn structures_a_completion() {
+        let body = r##"{"choices":[{"message":{"content":"# Objective\nWrite a poem.\n\n# Output\nA poem."}}]}"##;
+        let (base, server) = serve(http("200 OK", body));
+        let client = PromptClient::new(base, "test-model".into(), "test-key".into(), Duration::from_secs(2));
+        let result = client.structure("write a poem").unwrap();
+        assert!(result.starts_with("# Objective"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_an_http_error() {
+        let (base, server) = serve(http("500 Internal Server Error", "{}"));
+        let client = PromptClient::new(base, "m".into(), "k".into(), Duration::from_secs(2));
+        assert!(client.structure("write a poem").is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_malformed_json() {
+        let (base, server) = serve(http("200 OK", "not json"));
+        let client = PromptClient::new(base, "m".into(), "k".into(), Duration::from_secs(2));
+        assert!(client.structure("write a poem").is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_an_unstructured_completion() {
+        let body = r#"{"choices":[{"message":{"content":"Sure, here is a poem."}}]}"#;
+        let (base, server) = serve(http("200 OK", body));
+        let client = PromptClient::new(base, "m".into(), "k".into(), Duration::from_secs(2));
+        assert!(client.structure("write a poem").is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn times_out_when_the_server_stalls() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let _ = stream.read(&mut buffer);
+            std::thread::sleep(Duration::from_secs(2));
+        });
+        let client = PromptClient::new(
+            format!("http://{address}/v1"),
+            "m".into(),
+            "k".into(),
+            Duration::from_millis(200),
+        );
+        assert!(client.structure("write a poem").is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn validates_endpoints() {
+        assert!(validate_base_url("https://api.example.com/v1").is_ok());
+        assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
+        assert!(validate_base_url("http://localhost:8080/v1").is_ok());
+        assert!(validate_base_url("http://example.com/v1").is_err());
+        assert!(validate_base_url("ftp://example.com").is_err());
+        assert!(validate_base_url("").is_err());
     }
 }
