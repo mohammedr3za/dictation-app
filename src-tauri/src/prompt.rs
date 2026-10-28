@@ -128,14 +128,25 @@ pub fn validate_base_url(base: &str) -> Result<()> {
     if lower.starts_with("https://") && lower.len() > "https://".len() {
         return Ok(());
     }
-    if let Some(rest) = lower.strip_prefix("http://") {
-        let host = rest.split(['/', ':']).next().unwrap_or("");
-        let local = matches!(host, "localhost" | "127.0.0.1") || rest.starts_with("[::1]");
-        if local {
-            return Ok(());
-        }
+    let Some(rest) = lower.strip_prefix("http://") else {
+        anyhow::bail!("the endpoint must use https, except for localhost")
+    };
+    // The authority ends at the path, query, or fragment. Userinfo makes the real
+    // host ambiguous (ureq strips it), so anything containing `@` is rejected.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        anyhow::bail!("the endpoint must use https, except for localhost")
     }
-    anyhow::bail!("the endpoint must use https, except for localhost")
+    let local = if let Some(after) = authority.strip_prefix("[::1]") {
+        after.is_empty() || after.starts_with(':')
+    } else {
+        matches!(authority.split(':').next().unwrap_or(""), "localhost" | "127.0.0.1")
+    };
+    if local {
+        Ok(())
+    } else {
+        anyhow::bail!("the endpoint must use https, except for localhost")
+    }
 }
 
 pub struct PromptClient {
@@ -152,7 +163,10 @@ impl PromptClient {
 
     pub fn structure(&self, payload: &str) -> Result<String> {
         validate_base_url(&self.base_url)?;
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.base_url.trim().trim_end_matches('/')
+        );
         let body = serde_json::json!({
             "model": self.model,
             "temperature": 0.2,
@@ -200,8 +214,10 @@ pub fn stored_key() -> Option<String> {
 pub fn save_key(key: &str) -> Result<()> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?;
     if key.is_empty() {
-        let _ = entry.delete_credential();
-        Ok(())
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     } else {
         entry.set_password(key)?;
         Ok(())
@@ -404,5 +420,10 @@ mod http_tests {
         assert!(validate_base_url("http://example.com/v1").is_err());
         assert!(validate_base_url("ftp://example.com").is_err());
         assert!(validate_base_url("").is_err());
+        assert!(validate_base_url("http://[::1]:8080/v1").is_ok());
+        assert!(validate_base_url("http://[::1]/v1").is_ok());
+        assert!(validate_base_url("http://localhost:8080@evil.com/v1").is_err());
+        assert!(validate_base_url("http://[::1]@evil.com/v1").is_err());
+        assert!(validate_base_url("  https://api.example.com/v1  ").is_ok());
     }
 }
