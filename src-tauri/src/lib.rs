@@ -4,6 +4,7 @@ pub mod dictation;
 pub mod hotkey;
 pub mod logfile;
 pub mod models;
+pub mod prompt;
 
 use config::{InsertMode, Settings};
 use dictation::Dictation;
