@@ -99,10 +99,28 @@ npm run tauri dev
   --model-dir ~/Library/Application\ Support/dictation-app/models/zipformer-en
 ```
 
+## Prompt generation
+
+Say **“insert prompt”** at the start of a dictation and the rest is rewritten into a structured Markdown
+prompt (Objective, Context, Steps, Constraints, Output) and pasted at the cursor instead of the raw words.
+The result is plain Markdown, so it works in any model’s chat box.
+
+Enable it in **Prompt** and configure an OpenAI-compatible endpoint, model, and API key. The key is stored in
+the OS keychain. The feature is off by default; if it is enabled without a key, the trigger still works but
+only the raw text is inserted.
+
+The default endpoint is Gödel Machines' inference API (`https://api.goedelmachines.com/v1`, model
+`deepseek/deepseek-v4.1-flash`); see [the inference docs](https://inference.goedelmachines.com/docs).
+Free-tier keys retain prompts and completions on the provider's side; paid keys use zero data retention.
+The API key is stored in the OS keychain and is never written to the settings file or the repository.
+
+When a request fails or times out, the raw words after the trigger are inserted, so nothing is lost.
+
 ## Privacy
 
 - Audio is transcribed locally and is never uploaded.
 - Cleanup is off by default. When enabled, transcript text is sent to the API endpoint you configure.
+- Prompt generation sends only the text after the trigger, only when enabled.
 - API keys are stored in the OS keychain (Keychain on macOS, Secret Service on Linux), never in the config file.
 
 ## Usage
