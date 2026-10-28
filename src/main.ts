@@ -11,6 +11,9 @@ interface Settings {
   cleanup_enabled: boolean;
   cleanup_base_url: string;
   cleanup_model: string;
+  prompt_enabled: boolean;
+  prompt_base_url: string;
+  prompt_model: string;
 }
 
 interface ModelInfo {
@@ -114,6 +117,22 @@ function renderHotkey() {
 
 function showHotkeyProblem(problem: string | null) {
   const line = el("#hotkey-problem");
+  line.textContent = problem ?? "";
+  line.classList.toggle("hidden", !problem);
+}
+
+async function renderPromptKeyState() {
+  const saved = await invoke<boolean>("has_prompt_key");
+  el("#prompt-key-state").textContent = saved
+    ? "A key is saved in the Keychain."
+    : "No key saved.";
+  el<HTMLInputElement>("#prompt-key").placeholder = saved
+    ? "Saved — type to replace"
+    : "Paste an API key";
+}
+
+function showPromptProblem(problem: string | null) {
+  const line = el("#prompt-problem");
   line.textContent = problem ?? "";
   line.classList.toggle("hidden", !problem);
 }
@@ -253,6 +272,11 @@ async function load() {
   renderHotkey();
   showHotkeyProblem(await invoke<string | null>("hotkey_status"));
 
+  el<HTMLInputElement>("#prompt-enabled").checked = settings.prompt_enabled;
+  el<HTMLInputElement>("#prompt-base-url").value = settings.prompt_base_url;
+  el<HTMLInputElement>("#prompt-model").value = settings.prompt_model;
+  await renderPromptKeyState();
+
   await renderModels();
 }
 
@@ -358,6 +382,32 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  el("#save-prompt").addEventListener("click", async () => {
+    const keyInput = el<HTMLInputElement>("#prompt-key");
+    settings.prompt_enabled = el<HTMLInputElement>("#prompt-enabled").checked;
+    settings.prompt_base_url = el<HTMLInputElement>("#prompt-base-url").value.trim();
+    settings.prompt_model = el<HTMLInputElement>("#prompt-model").value.trim();
+    try {
+      await invoke("save_settings", { settings });
+      if (keyInput.value) {
+        await invoke("save_prompt_key", { key: keyInput.value });
+        keyInput.value = "";
+      }
+      showPromptProblem(null);
+      setStatus("Saved");
+      await renderPromptKeyState();
+    } catch (error) {
+      showPromptProblem(String(error));
+      setStatus("Prompt settings not saved");
+    }
+  });
+
+  el("#remove-prompt-key").addEventListener("click", async () => {
+    await invoke("save_prompt_key", { key: "" });
+    await renderPromptKeyState();
+    setStatus("API key removed");
+  });
+
   await listen<{ downloaded: number; total: number }>("model-progress", (event) => {
     const { downloaded, total } = event.payload;
     const percent = total ? Math.round((downloaded / total) * 100) : 0;
@@ -397,6 +447,18 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   await listen<string>("dictation-error", (event) => {
     transcriptState.textContent = `Error: ${event.payload}`;
+  });
+
+  await listen<{ state: string; message?: string | null }>("prompt-status", (event) => {
+    const { state, message } = event.payload;
+    if (state === "structuring") {
+      transcriptState.textContent = "Structuring prompt…";
+      setStatus("Structuring prompt…");
+    } else if (state === "failed") {
+      setStatus(message ?? "Prompt structuring failed");
+    } else {
+      setStatus("Prompt ready");
+    }
   });
 
   await load();
