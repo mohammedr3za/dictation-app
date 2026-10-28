@@ -19,6 +19,12 @@ struct DownloadProgress {
     total: u64,
 }
 
+#[derive(Serialize, Clone)]
+struct PromptStatus {
+    state: &'static str,
+    message: Option<String>,
+}
+
 /// Why the saved shortcut is inactive, if it is.
 #[derive(Default)]
 struct HotkeyStatus(Mutex<Option<String>>);
@@ -73,6 +79,9 @@ fn preload_model(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+    if settings.prompt_enabled || !settings.prompt_base_url.trim().is_empty() {
+        prompt::validate_base_url(&settings.prompt_base_url).map_err(|e| format!("{e:#}"))?;
+    }
     config::save(&settings).map_err(|e| format!("{e:#}"))?;
     preload_model(&app);
     apply_hotkey(&app, &settings.hotkey)
@@ -145,6 +154,16 @@ fn save_api_key(key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn has_prompt_key() -> bool {
+    prompt::stored_key().is_some()
+}
+
+#[tauri::command]
+fn save_prompt_key(key: String) -> Result<(), String> {
+    prompt::save_key(&key).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 fn app_info() -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -161,22 +180,21 @@ fn start_dictation(app: tauri::AppHandle, dictation: tauri::State<Dictation>) ->
 }
 
 #[tauri::command]
-fn stop_dictation(
-    app: tauri::AppHandle,
-    dictation: tauri::State<Dictation>,
-) -> Result<String, String> {
-    let text = dictation.stop().map_err(|e| format!("{e:#}"))?;
-    let _ = app.emit("recording", false);
-
-    if text.is_empty() {
-        return Ok(text);
-    }
-
-    let settings = config::load();
-    let paste = settings.insert_mode == InsertMode::Paste;
-    dictation::insert(&text, paste).map_err(|e| format!("{e:#}"))?;
-    let _ = app.emit("transcript", text.clone());
-    Ok(text)
+async fn stop_dictation(app: tauri::AppHandle) -> Result<String, String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let text = {
+            let dictation = handle.state::<Dictation>();
+            dictation.stop().map_err(|e| format!("{e:#}"))?
+        };
+        let _ = handle.emit("recording", false);
+        if text.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(finish(&handle, text))
+    })
+    .await
+    .map_err(|e| format!("{e}"))?
 }
 
 #[tauri::command]
@@ -201,7 +219,9 @@ fn toggle(app: &tauri::AppHandle) {
             let result = dictation.stop();
             let _ = app.emit("recording", false);
             match result {
-                Ok(text) if !text.is_empty() => deliver(&app, text),
+                Ok(text) if !text.is_empty() => {
+                    finish(&app, text);
+                }
                 Ok(_) => logfile::line("no speech recognized"),
                 Err(error) => {
                     logfile::line(format!("stop failed: {error:#}"));
@@ -238,6 +258,77 @@ fn deliver(app: &tauri::AppHandle, text: String) {
             let _ = handle.emit("dictation-error", format!("{error:#}"));
         }
     });
+}
+
+/// Routes a finished transcript through prompt mode, then inserts the result.
+/// Returns the text that was actually delivered.
+fn finish(app: &tauri::AppHandle, text: String) -> String {
+    let settings = config::load();
+    let key = prompt::stored_key();
+    match prompt::plan(&text, settings.prompt_enabled, key.is_some()) {
+        prompt::PromptAction::Plain => {
+            deliver(app, text.clone());
+            text
+        }
+        prompt::PromptAction::EmptyPayload => {
+            logfile::line("prompt trigger with an empty payload");
+            let _ = app.emit(
+                "prompt-status",
+                PromptStatus {
+                    state: "failed",
+                    message: Some("Nothing after \u{201c}insert prompt\u{201d}.".into()),
+                },
+            );
+            String::new()
+        }
+        prompt::PromptAction::NoKey { payload } => {
+            logfile::line("prompt trigger without a saved key");
+            let _ = app.emit(
+                "prompt-status",
+                PromptStatus {
+                    state: "failed",
+                    message: Some("No API key saved — inserted the raw text.".into()),
+                },
+            );
+            deliver(app, payload.clone());
+            payload
+        }
+        prompt::PromptAction::Structure { payload } => {
+            let _ = app.emit(
+                "prompt-status",
+                PromptStatus { state: "structuring", message: None },
+            );
+            let client = prompt::PromptClient::new(
+                settings.prompt_base_url,
+                settings.prompt_model,
+                key.unwrap_or_default(),
+                std::time::Duration::from_secs(12),
+            );
+            match client.structure(&payload) {
+                Ok(structured) => {
+                    logfile::line(format!("structured prompt: {} chars", structured.chars().count()));
+                    let _ = app.emit(
+                        "prompt-status",
+                        PromptStatus { state: "done", message: None },
+                    );
+                    deliver(app, structured.clone());
+                    structured
+                }
+                Err(error) => {
+                    logfile::line(format!("prompt structuring failed: {error:#}"));
+                    let _ = app.emit(
+                        "prompt-status",
+                        PromptStatus {
+                            state: "failed",
+                            message: Some("Couldn't structure the prompt — inserted the raw text.".into()),
+                        },
+                    );
+                    deliver(app, payload.clone());
+                    payload
+                }
+            }
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -312,6 +403,8 @@ pub fn run() {
             delete_model,
             has_api_key,
             save_api_key,
+            has_prompt_key,
+            save_prompt_key,
             app_info,
             start_dictation,
             stop_dictation,
