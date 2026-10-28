@@ -34,6 +34,22 @@ fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
         && haystack.as_bytes()[..needle.len()].eq_ignore_ascii_case(needle.as_bytes())
 }
 
+fn strip_leading_separators(text: &str) -> &str {
+    let mut rest = text.trim_start();
+    loop {
+        let mut chars = rest.chars();
+        let Some(first) = chars.next() else { return rest };
+        if !matches!(first, ',' | ':' | '.' | '—' | '-') {
+            return rest;
+        }
+        // A minus sign followed by a digit belongs to the payload, not the delimiter.
+        if first == '-' && chars.next().is_some_and(|c| c.is_ascii_digit()) {
+            return rest;
+        }
+        rest = rest[first.len_utf8()..].trim_start();
+    }
+}
+
 pub fn trigger_payload(transcript: &str) -> Option<&str> {
     let text = transcript.trim_start();
     for trigger in TRIGGERS {
@@ -44,8 +60,7 @@ pub fn trigger_payload(transcript: &str) -> Option<&str> {
         if rest.chars().next().is_some_and(|c| c.is_alphanumeric()) {
             continue;
         }
-        let rest = rest.trim_start_matches([' ', '\t', ',', ':', '.', '—', '-']);
-        return Some(rest.trim());
+        return Some(strip_leading_separators(rest).trim_end());
     }
     None
 }
@@ -72,9 +87,12 @@ pub fn plan(transcript: &str, enabled: bool, has_key: bool) -> PromptAction {
 
 fn strip_code_fence(text: &str) -> &str {
     if text.starts_with("```") && text.ends_with("```") && text.len() > 6 {
-        if let Some(newline) = text.find('\n') {
-            return text[newline + 1..text.len() - 3].trim();
-        }
+        let inner = &text[3..text.len() - 3];
+        let inner = inner
+            .strip_prefix("markdown")
+            .or_else(|| inner.strip_prefix("md"))
+            .unwrap_or(inner);
+        return inner.trim();
     }
     text
 }
@@ -173,5 +191,37 @@ mod tests {
         assert!(validate_response("").is_err());
         assert!(validate_response("Just some prose.").is_err());
         assert!(validate_response("# Objectives\nPlural is not the heading.").is_err());
+    }
+
+    #[test]
+    fn strips_only_delimiters_and_keeps_a_minus_sign() {
+        assert_eq!(trigger_payload("insert prompt. write a poem"), Some("write a poem"));
+        assert_eq!(trigger_payload("insert prompt - write a poem"), Some("write a poem"));
+        assert_eq!(trigger_payload("insert prompt: -5 degrees"), Some("-5 degrees"));
+        assert_eq!(trigger_payload("insert prompt -5 degrees"), Some("-5 degrees"));
+        assert_eq!(trigger_payload("insert prompt...explain it"), Some("explain it"));
+    }
+
+    #[test]
+    fn matches_the_objective_heading_case_insensitively() {
+        assert!(validate_response("# OBJECTIVE\nDo it.").is_ok());
+        assert!(validate_response("# objective\ndo it").is_ok());
+    }
+
+    #[test]
+    fn an_empty_payload_wins_over_a_missing_key() {
+        assert_eq!(plan("insert prompt", true, false), PromptAction::EmptyPayload);
+    }
+
+    #[test]
+    fn strips_a_single_line_fence() {
+        assert_eq!(validate_response("```# Objective\nDo it.```").unwrap(), "# Objective\nDo it.");
+        assert_eq!(validate_response("```# Objective```").unwrap(), "# Objective");
+    }
+
+    #[test]
+    fn keeps_a_fence_that_does_not_wrap_the_response() {
+        let text = validate_response("Here you go:\n```\n# Objective\nDo it.\n```").unwrap();
+        assert!(text.contains("```"));
     }
 }
