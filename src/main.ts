@@ -384,28 +384,47 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   el("#save-prompt").addEventListener("click", async () => {
     const keyInput = el<HTMLInputElement>("#prompt-key");
-    settings.prompt_enabled = el<HTMLInputElement>("#prompt-enabled").checked;
-    settings.prompt_base_url = el<HTMLInputElement>("#prompt-base-url").value.trim();
-    settings.prompt_model = el<HTMLInputElement>("#prompt-model").value.trim();
+    const next: Settings = {
+      ...settings,
+      prompt_enabled: el<HTMLInputElement>("#prompt-enabled").checked,
+      prompt_base_url: el<HTMLInputElement>("#prompt-base-url").value.trim(),
+      prompt_model: el<HTMLInputElement>("#prompt-model").value.trim(),
+    };
     try {
-      await invoke("save_settings", { settings });
-      if (keyInput.value) {
-        await invoke("save_prompt_key", { key: keyInput.value });
-        keyInput.value = "";
-      }
-      showPromptProblem(null);
-      setStatus("Saved");
-      await renderPromptKeyState();
+      await invoke("save_settings", { settings: next });
     } catch (error) {
       showPromptProblem(String(error));
       setStatus("Prompt settings not saved");
+      return;
     }
+    settings = next;
+    if (keyInput.value) {
+      try {
+        await invoke("save_prompt_key", { key: keyInput.value });
+        keyInput.value = "";
+      } catch (error) {
+        showPromptProblem(`Settings saved, key not saved: ${error}`);
+        setStatus("Settings saved, key not saved");
+        await renderPromptKeyState();
+        return;
+      }
+    }
+    showPromptProblem(null);
+    setStatus("Saved");
+    await renderPromptKeyState();
   });
 
   el("#remove-prompt-key").addEventListener("click", async () => {
-    await invoke("save_prompt_key", { key: "" });
-    await renderPromptKeyState();
-    setStatus("API key removed");
+    try {
+      await invoke("save_prompt_key", { key: "" });
+      el<HTMLInputElement>("#prompt-key").value = "";
+      showPromptProblem(null);
+      await renderPromptKeyState();
+      setStatus("API key removed");
+    } catch (error) {
+      showPromptProblem(String(error));
+      setStatus("Could not remove the API key");
+    }
   });
 
   await listen<{ downloaded: number; total: number }>("model-progress", (event) => {
