@@ -27,6 +27,7 @@
         <nav>
           <button class="nav active" data-panel="general">General</button>
           <button class="nav" data-panel="model">Model</button>
+          <button class="nav" data-panel="prompt">Prompt</button>
           <button class="nav" data-panel="about">About</button>
         </nav>
         <div class="status" id="status">Ready</div>
@@ -78,6 +79,39 @@
             <div class="bar"><div class="fill" id="progress-fill"></div></div>
             <span id="progress-label"></span>
           </div>
+        </section>
+
+        <section class="panel" id="panel-prompt">
+          <h2>Prompt generation</h2>
+          <p class="hint">Start a dictation with “insert prompt” to convert the rest into a structured prompt.</p>
+
+          <label class="toggle">
+            <input type="checkbox" id="prompt-enabled" />
+            <span>Structure dictated prompts</span>
+          </label>
+
+          <label class="field">
+            <span>Endpoint</span>
+            <input type="url" id="prompt-base-url" placeholder="https://api.example.com/v1" />
+          </label>
+
+          <label class="field">
+            <span>Model</span>
+            <input type="text" id="prompt-model" placeholder="deepseek/deepseek-v4.1-flash" />
+          </label>
+
+          <label class="field">
+            <span>API key</span>
+            <input type="password" id="prompt-key" autocomplete="off" />
+          </label>
+          <p class="hint" id="prompt-key-state"></p>
+          <p class="hint">Audio stays on this machine. Only the words after the trigger are sent to this endpoint.</p>
+
+          <div class="field">
+            <button class="primary" id="save-prompt">Save</button>
+            <button class="secondary" id="remove-prompt-key">Remove key</button>
+          </div>
+          <p id="prompt-problem" class="problem hidden"></p>
         </section>
 
         <section class="panel" id="panel-about">
