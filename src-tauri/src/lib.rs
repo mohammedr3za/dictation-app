@@ -79,12 +79,28 @@ fn preload_model(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
-    if settings.prompt_enabled || !settings.prompt_base_url.trim().is_empty() {
-        prompt::validate_base_url(&settings.prompt_base_url).map_err(|e| format!("{e:#}"))?;
-    }
     config::save(&settings).map_err(|e| format!("{e:#}"))?;
     preload_model(&app);
     apply_hotkey(&app, &settings.hotkey)
+}
+
+/// Saves only the prompt settings. Unlike `save_settings`, it neither re-registers
+/// the shortcut nor reloads the model, so a hotkey problem cannot make a prompt
+/// save look like a failure.
+#[tauri::command]
+fn save_prompt_settings(
+    prompt_enabled: bool,
+    prompt_base_url: String,
+    prompt_model: String,
+) -> Result<(), String> {
+    if prompt_enabled || !prompt_base_url.trim().is_empty() {
+        prompt::validate_base_url(&prompt_base_url).map_err(|e| format!("{e:#}"))?;
+    }
+    let mut settings = config::load();
+    settings.prompt_enabled = prompt_enabled;
+    settings.prompt_base_url = prompt_base_url;
+    settings.prompt_model = prompt_model;
+    config::save(&settings).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -181,17 +197,16 @@ fn start_dictation(app: tauri::AppHandle, dictation: tauri::State<Dictation>) ->
 
 #[tauri::command]
 async fn stop_dictation(app: tauri::AppHandle) -> Result<String, String> {
-    let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let text = {
-            let dictation = handle.state::<Dictation>();
+            let dictation = app.state::<Dictation>();
             dictation.stop().map_err(|e| format!("{e:#}"))?
         };
-        let _ = handle.emit("recording", false);
+        let _ = app.emit("recording", false);
         if text.is_empty() {
             return Ok(String::new());
         }
-        Ok(finish(&handle, text))
+        Ok(finish(&app, text))
     })
     .await
     .map_err(|e| format!("{e}"))?
@@ -243,8 +258,7 @@ fn toggle(app: &tauri::AppHandle) {
     });
 }
 
-/// Inserts the transcript on the main thread: typing the paste shortcut looks
-/// up the keyboard layout, which macOS only allows there.
+/// Hands the transcript to the main thread for insertion.
 fn deliver(app: &tauri::AppHandle, text: String) {
     let paste = config::load().insert_mode == InsertMode::Paste;
     let handle = app.clone();
@@ -261,10 +275,11 @@ fn deliver(app: &tauri::AppHandle, text: String) {
 }
 
 /// Routes a finished transcript through prompt mode, then inserts the result.
-/// Returns the text that was actually delivered.
+/// Returns the text that was handed to `deliver`.
 fn finish(app: &tauri::AppHandle, text: String) -> String {
     let settings = config::load();
-    let key = prompt::stored_key();
+    let detected = settings.prompt_enabled && prompt::trigger_payload(&text).is_some();
+    let key = if detected { prompt::stored_key() } else { None };
     match prompt::plan(&text, settings.prompt_enabled, key.is_some()) {
         prompt::PromptAction::Plain => {
             deliver(app, text.clone());
@@ -306,6 +321,9 @@ fn finish(app: &tauri::AppHandle, text: String) -> String {
             );
             match client.structure(&payload) {
                 Ok(structured) => {
+                    if app.state::<Dictation>().is_recording() {
+                        logfile::line("structured prompt arrived after a new recording started");
+                    }
                     logfile::line(format!("structured prompt: {} chars", structured.chars().count()));
                     let _ = app.emit(
                         "prompt-status",
@@ -396,6 +414,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
+            save_prompt_settings,
             hotkey_status,
             pause_hotkey,
             list_models,

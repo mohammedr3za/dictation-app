@@ -102,8 +102,9 @@ npm run tauri dev
 ## Prompt generation
 
 Say **“insert prompt”** at the start of a dictation and the rest is rewritten into a structured Markdown
-prompt (Objective, Context, Steps, Constraints, Output) and pasted at the cursor instead of the raw words.
-The result is plain Markdown, so it works in any model’s chat box.
+prompt (Objective, Context, Steps, Constraints, Output) and inserted at the cursor (or copied, in
+clipboard mode) instead of the raw words. The result is plain Markdown, so it works in any model’s chat
+box.
 
 Enable it in **Prompt** and configure an OpenAI-compatible endpoint, model, and API key. The key is stored in
 the OS keychain. The feature is off by default; if it is enabled without a key, the trigger still works but
